@@ -1,72 +1,317 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Minecraft 回転角 → 座標ベクトル変換ツール</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>2点＋Yaw -> 交点（Minecraft座標系）</title>
   <style>
     body {
-      font-family: "Segoe UI", sans-serif;
-      background-color: #f8f9fa;
-      color: #222;
-      margin: 40px auto;
-      max-width: 500px;
-      text-align: center;
-      border-radius: 12px;
-      box-shadow: 0 4px 16px rgba(0,0,0,0.1);
-      padding: 24px;
+      font-family: "Noto Sans JP", "Segoe UI", sans-serif;
+      margin: 20px;
+      background: #f5f7fb;
+      color: #111;
     }
-    h1 {
-      font-size: 1.3rem;
-      margin-bottom: 16px;
+    .container {
+      max-width: 880px;
+      margin: 0 auto;
+      display: flex;
+      gap: 20px;
+      align-items: flex-start;
     }
-    input[type=number] {
-      width: 100px;
-      font-size: 1rem;
-      text-align: center;
-      margin: 8px;
+    .panel {
+      background: white;
+      padding: 16px;
+      border-radius: 10px;
+      box-shadow: 0 6px 18px rgba(15,20,30,0.06);
+      flex: 1;
     }
-    .result {
-      margin-top: 20px;
-      padding: 10px;
-      border-radius: 8px;
-      background-color: #fff;
-      box-shadow: inset 0 0 4px rgba(0,0,0,0.1);
-    }
-    .note {
-      font-size: 0.85rem;
-      color: #555;
-      margin-top: 16px;
-    }
+    h1 { font-size: 1.1rem; margin: 0 0 10px 0; }
+    label { display:block; font-size:0.9rem; margin-top:8px; color:#333; }
+    input[type=number] { width:120px; padding:6px; margin-top:6px; }
+    .row { display:flex; gap:8px; align-items:center; margin-top:6px; }
+    button { margin-top:12px; padding:8px 12px; border-radius:8px; border:0; background:#0066ff; color:white; cursor:pointer; }
+    button:active { transform: translateY(1px); }
+    .result { margin-top:12px; font-weight:600; }
+    canvas { background:#e9eef7; border-radius:8px; display:block; width:100%; height:480px; }
+    .note { font-size:0.85rem; color:#555; margin-top:8px; }
+    .small { font-size:0.85rem; color:#444; }
   </style>
 </head>
 <body>
-  <h1>マイクラ回転角 → 座標ベクトル変換</h1>
-  <label>Yaw角度（-180～180°）</label><br>
-  <input type="number" id="yaw" value="0" step="1" min="-180" max="180" oninput="updateVector()">
+  <h1>2点＋Yaw → 交点（マイクラ座標系）</h1>
+  <div class="container">
+    <div class="panel" style="max-width:360px;">
+      <div>
+        <h2>入力</h2>
+        <!-- 左側の点 -->
+        <div>
+          <label>点 A (x₁, z₁)</label>
+          <div class="row">
+            <input id="ax" type="number" step="0.1" value="0" /> 
+            <input id="az" type="number" step="0.1" value="0" />
+          </div>
+          <label>Yaw₁（度、-180〜180）</label>
+          <input id="ayaw" type="number" step="1" value="0" />
+        </div>
 
-  <div class="result">
-    <p><b>X:</b> <span id="x">0.000</span></p>
-    <p><b>Z:</b> <span id="z">1.000</span></p>
-  </div>
+        <!-- 右側の点 -->
+        <div style="margin-top:12px;">
+          <label>点 B (x₂, z₂)</label>
+          <div class="row">
+            <input id="bx" type="number" step="0.1" value="5" /> 
+            <input id="bz" type="number" step="0.1" value="2" />
+          </div>
+          <label>Yaw₂（度、-180〜180）</label>
+          <input id="byaw" type="number" step="1" value="-90" />
+        </div>
 
-  <div class="note">
-    <p>計算式：<br>
-    x = -sin(yaw × π / 180)<br>
-    z =  cos(yaw × π / 180)</p>
-    <p>Yaw=0°は南向き（+Z方向）です。</p>
+        <div class="row">
+          <button id="calcBtn">交点を計算・表示</button>
+          <button id="resetBtn" style="background:#666;">リセット</button>
+        </div>
+
+        <div class="result" id="resultBox">結果: —</div>
+        <div class="note">
+          <div>計算式（方向ベクトル）: dx = -sin(yaw×π/180), dz = cos(yaw×π/180)</div>
+          <div class="small">注意: 直線が平行（またはほぼ平行）な場合は交点が存在しません。</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" style="flex:2;">
+      <h2>可視化</h2>
+      <canvas id="view" width="800" height="480"></canvas>
+      <div class="note" id="infoArea"></div>
+    </div>
   </div>
 
   <script>
-    function updateVector() {
-      const yaw = parseFloat(document.getElementById('yaw').value) || 0;
-      const rad = yaw * Math.PI / 180;
-      const x = -Math.sin(rad);
-      const z = Math.cos(rad);
-      document.getElementById('x').textContent = x.toFixed(3);
-      document.getElementById('z').textContent = z.toFixed(3);
+    // --- ユーティリティ ---
+    // 2Dクロス（外積的スカラー）: cross(a,b) = a.x*b.y - a.y*b.x
+    function cross(ax, az, bx, bz) { return ax * bz - az * bx; }
+
+    // 度→ラジアン変換
+    function degToRad(d) { return d * Math.PI / 180.0; }
+
+    // Yawから方向ベクトルを求める（マイクラ座標系）
+    // // dx = -sin(yaw), dz = cos(yaw)
+    function yawToDir(yawDeg) {
+      const r = degToRad(yawDeg);
+      return { dx: -Math.sin(r), dz: Math.cos(r) };
     }
-    updateVector(); // 初期表示
+
+    // 交点を求める関数
+    // 入力: A(x1,z1), dir1(dx1,dz1), B(x2,z2), dir2(dx2,dz2)
+    // 出力: {ok: true, x, z, t1, t2} または {ok:false, reason}
+    function intersectLines(x1, z1, dx1, dz1, x2, z2, dx2, dz2) {
+      // 分母: 2本の方向ベクトルの外積
+      const denom = cross(dx1, dz1, dx2, dz2);
+      const EPS = 1e-9;
+      if (Math.abs(denom) < EPS) {
+        return { ok: false, reason: "平行またはほぼ平行（交点なし）", denom: denom };
+      }
+      // t1 = cross( (x2-x1, z2-z1), dir2 ) / denom
+      const rx = x2 - x1;
+      const rz = z2 - z1;
+      const t1 = cross(rx, rz, dx2, dz2) / denom;
+      const t2 = cross(rx, rz, dx1, dz1) / denom; // optional
+      const ix = x1 + dx1 * t1;
+      const iz = z1 + dz1 * t1;
+      return { ok: true, x: ix, z: iz, t1: t1, t2: t2, denom: denom };
+    }
+
+    // --- DOM取得 ---
+    const axIn = document.getElementById('ax');
+    const azIn = document.getElementById('az');
+    const ayawIn = document.getElementById('ayaw');
+    const bxIn = document.getElementById('bx');
+    const bzIn = document.getElementById('bz');
+    const byawIn = document.getElementById('byaw');
+    const calcBtn = document.getElementById('calcBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const resultBox = document.getElementById('resultBox');
+    const infoArea = document.getElementById('infoArea');
+
+    // Canvas
+    const canvas = document.getElementById('view');
+    const ctx = canvas.getContext('2d');
+
+    // 描画スケールと座標系変換（マイクラのX右、Z下をキャンバスに合わせて描画）
+    // ここでは自動で表示範囲を決めるヘルパーを使う
+    function drawScene(x1,z1,dx1,dz1, x2,z2,dx2,dz2, inter) {
+      // クリア
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+
+      // ビュー範囲を決める（全ての点・方向線が見えるように）
+      // まず候補点を収集：A,B,および各方向に伸ばした先（t = -20..+20）
+      const pts = [];
+      pts.push({x:x1,z:z1});
+      pts.push({x:x2,z:z2});
+      const pushDirSamples = (x,z,dx,dz) => {
+        for (let t=-20; t<=20; t+=10) pts.push({x: x + dx*t, z: z + dz*t});
+      };
+      pushDirSamples(x1,z1,dx1,dz1);
+      pushDirSamples(x2,z2,dx2,dz2);
+      if (inter && inter.ok) pts.push({x: inter.x, z: inter.z});
+
+      // バウンディングボックス
+      let minX=Infinity, maxX=-Infinity, minZ=Infinity, maxZ=-Infinity;
+      pts.forEach(p => {
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+        if (p.z < minZ) minZ = p.z;
+        if (p.z > maxZ) maxZ = p.z;
+      });
+      // マージンを追加
+      const mx = (maxX - minX) || 1;
+      const mz = (maxZ - minZ) || 1;
+      minX -= mx*0.25; maxX += mx*0.25;
+      minZ -= mz*0.25; maxZ += mz*0.25;
+
+      // 座標→キャンバス変換
+      const padding = 20;
+      const scaleX = (canvas.width - padding*2) / (maxX - minX);
+      const scaleZ = (canvas.height - padding*2) / (maxZ - minZ);
+      const scale = Math.min(scaleX, scaleZ);
+      const toCanvas = (x,z) => {
+        // マイクラ: X右(+), Z下(+) をキャンバスに合わせる（そのまま）
+        const cx = padding + (x - minX) * scale;
+        const cz = padding + (z - minZ) * scale;
+        return {cx, cz};
+      };
+
+      // グリッド描画（軽め）
+      ctx.strokeStyle = "#dbe9ff";
+      ctx.lineWidth = 1;
+      const gridStep = Math.max(1, Math.round((maxX - minX)/8));
+      for (let gx = Math.ceil(minX / gridStep) * gridStep; gx <= maxX; gx += gridStep) {
+        const p1 = toCanvas(gx, minZ);
+        const p2 = toCanvas(gx, maxZ);
+        ctx.beginPath(); ctx.moveTo(p1.cx, p1.cz); ctx.lineTo(p2.cx, p2.cz); ctx.stroke();
+      }
+      const gridStepZ = Math.max(1, Math.round((maxZ - minZ)/8));
+      for (let gz = Math.ceil(minZ / gridStepZ) * gridStepZ; gz <= maxZ; gz += gridStepZ) {
+        const p1 = toCanvas(minX, gz);
+        const p2 = toCanvas(maxX, gz);
+        ctx.beginPath(); ctx.moveTo(p1.cx, p1.cz); ctx.lineTo(p2.cx, p2.cz); ctx.stroke();
+      }
+
+      // 補助テキスト
+      ctx.fillStyle = "#223344";
+      ctx.font = "12px sans-serif";
+      ctx.fillText("X→ 右, Z↓ 下 （マイクラ座標系）", 8, 14);
+
+      // それぞれの直線を描く（長めに描画）
+      function drawRay(x,z,dx,dz, color) {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        // t from -100 .. +100
+        const pA = toCanvas(x - dx*100, z - dz*100);
+        const pB = toCanvas(x + dx*100, z + dz*100);
+        ctx.moveTo(pA.cx, pA.cz);
+        ctx.lineTo(pB.cx, pB.cz);
+        ctx.stroke();
+      }
+
+      drawRay(x1,z1,dx1,dz1, "#ff6b6b"); // Aの線（赤系）
+      drawRay(x2,z2,dx2,dz2, "#4b7cff"); // Bの線（青系）
+
+      // 点Aと点Bを描く
+      function drawPoint(x,z, color, label) {
+        const p = toCanvas(x,z);
+        ctx.fillStyle = color;
+        ctx.beginPath(); ctx.arc(p.cx, p.cz, 6, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle = "#fff";
+        ctx.font = "12px sans-serif";
+        ctx.fillText(label, p.cx + 8, p.cz - 8);
+      }
+      drawPoint(x1,z1, "#b02a2a", "A");
+      drawPoint(x2,z2, "#0f62ff", "B");
+
+      // 方向矢印をそれぞれ短く描画
+      function drawDirArrow(x,z,dx,dz, color) {
+        const pStart = toCanvas(x,z);
+        const len = 28;
+        const pEnd = toCanvas(x + dx*len/scale, z + dz*len/scale); // scale逆で調整
+        ctx.strokeStyle = color; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.moveTo(pStart.cx, pStart.cz); ctx.lineTo(pEnd.cx, pEnd.cz); ctx.stroke();
+      }
+      drawDirArrow(x1,z1,dx1,dz1, "#ff6b6b");
+      drawDirArrow(x2,z2,dx2,dz2, "#4b7cff");
+
+      // 交点があれば描画
+      if (inter && inter.ok) {
+        const pI = toCanvas(inter.x, inter.z);
+        ctx.fillStyle = "#0aa95a";
+        ctx.beginPath(); ctx.arc(pI.cx, pI.cz, 7, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle = "#fff";
+        ctx.font = "12px sans-serif";
+        ctx.fillText("交点", pI.cx + 8, pI.cz - 8);
+
+        // 補助線（A->交点, B->交点）
+        ctx.setLineDash([6,6]);
+        ctx.strokeStyle = "rgba(0,0,0,0.18)";
+        ctx.beginPath();
+        const pa = toCanvas(x1,z1); ctx.moveTo(pa.cx, pa.cz);
+        ctx.lineTo(pI.cx, pI.cz);
+        const pb = toCanvas(x2,z2); ctx.moveTo(pb.cx, pb.cz);
+        ctx.lineTo(pI.cx, pI.cz);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+
+    // --- 計算・UI連携 ---
+    function performCalcAndDraw() {
+      // 入力値を読む
+      const x1 = parseFloat(axIn.value) || 0;
+      const z1 = parseFloat(azIn.value) || 0;
+      const yaw1 = parseFloat(ayawIn.value) || 0;
+      const x2 = parseFloat(bxIn.value) || 0;
+      const z2 = parseFloat(bzIn.value) || 0;
+      const yaw2 = parseFloat(byawIn.value) || 0;
+
+      // Yaw -> dir
+      const d1 = yawToDir(yaw1);
+      const d2 = yawToDir(yaw2);
+
+      // 交点計算
+      const inter = intersectLines(x1,z1,d1.dx,d1.dz, x2,z2,d2.dx,d2.dz);
+
+      // 結果表示
+      if (!inter.ok) {
+        resultBox.textContent = `結果: 交点なし — ${inter.reason}`;
+        infoArea.innerHTML = `
+          <div>分母（外積）: ${inter.denom !== undefined ? inter.denom.toExponential(3) : '---'}</div>
+          <div class="small">※ 直線が平行もしくはほぼ平行です。</div>
+        `;
+      } else {
+        resultBox.textContent = `結果: 交点 = ( x = ${inter.x.toFixed(4)} , z = ${inter.z.toFixed(4)} )`;
+        infoArea.innerHTML = `
+          <div>t₁ = ${inter.t1.toFixed(6)} , t₂ = ${inter.t2.toFixed(6)}</div>
+          <div class="small">t₁ が正なら A の向きに交点があることを示します（負なら後方）。</div>
+        `;
+      }
+
+      // 描画
+      drawScene(x1,z1,d1.dx,d1.dz, x2,z2,d2.dx,d2.dz, inter);
+    }
+
+    // イベント
+    calcBtn.addEventListener('click', performCalcAndDraw);
+    // Enterでも計算
+    [axIn,azIn,ayawIn,bxIn,bzIn,byawIn].forEach(el => {
+      el.addEventListener('keydown', (e) => { if (e.key === 'Enter') performCalcAndDraw(); });
+    });
+    resetBtn.addEventListener('click', () => {
+      axIn.value = 0; azIn.value = 0; ayawIn.value = 0;
+      bxIn.value = 5; bzIn.value = 2; byawIn.value = -90;
+      performCalcAndDraw();
+    });
+
+    // 初期表示
+    performCalcAndDraw();
   </script>
 </body>
 </html>
